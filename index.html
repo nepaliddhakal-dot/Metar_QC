@@ -448,26 +448,34 @@ function renderResult(result, sourceLabel){
 /* ---------- Fetching ---------- */
 async function fetchStation(icao){
   const directUrl = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`;
-  let text, usedProxy=false;
+  const proxies = [
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
+  ];
+
+  // Try direct first
   try{
     const res = await fetch(directUrl);
-    if(!res.ok) throw new Error('status '+res.status);
-    text = await res.text();
-  } catch(directErr){
-    // Direct request blocked (network restriction or CORS) — retry via proxy
-    try{
-      const res2 = await fetch(proxyUrl);
-      if(!res2.ok) throw new Error('status '+res2.status);
-      text = await res2.text();
-      usedProxy = true;
-    } catch(proxyErr){
-      throw new Error('DIRECT_AND_PROXY_FAILED');
+    if(res.ok){
+      const text = await res.text();
+      const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
+      if(line) return {line, via:'direct'};
     }
+  } catch(e){ /* fall through to proxies */ }
+
+  // Try each proxy in turn
+  for(const build of proxies){
+    try{
+      const res = await fetch(build(directUrl));
+      if(!res.ok) continue;
+      const text = await res.text();
+      const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
+      if(line && /^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(line)) return {line, via:'proxy'};
+    } catch(e){ /* try next proxy */ }
   }
-  const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
-  if(!line) throw new Error('No recent observation returned for '+icao);
-  return {line, usedProxy};
+
+  throw new Error('ALL_ROUTES_FAILED');
 }
 
 async function doFetch(){
@@ -476,18 +484,18 @@ async function doFetch(){
   const btn = document.getElementById('fetchBtn');
   btn.textContent='Fetching…'; btn.disabled=true;
   try{
-    const {line, usedProxy} = await fetchStation(icao);
+    const {line, via} = await fetchStation(icao);
     const result = parseMetar(line);
-    const via = usedProxy ? 'via proxy (direct connection was blocked)' : 'direct';
-    renderResult(result, `Live from aviationweather.gov · ${icao} · ${via} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
+    const viaLabel = via==='proxy' ? 'via backup proxy (direct connection blocked)' : 'direct';
+    renderResult(result, `Live from aviationweather.gov · ${icao} · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
   } catch(err){
     document.getElementById('statusDot').className='dot bad';
     const log = document.getElementById('logList');
     let hint;
     if(location.protocol==='file:'){
       hint = 'This page is open as a local file (file://), which browsers block from making live network requests. Serve it over http(s) — e.g. GitHub Pages, or run a local server — and this will work.';
-    } else if(err.message==='DIRECT_AND_PROXY_FAILED'){
-      hint = 'Both the direct connection and the backup proxy failed — this looks like no internet access on this connection right now, rather than a site-specific block.';
+    } else if(err.message==='ALL_ROUTES_FAILED'){
+      hint = 'The direct connection and all backup routes failed. If you can open aviationweather.gov directly in a browser tab but the app still can\'t reach it, this is very likely an ad-blocker, privacy extension, or corporate security proxy blocking script-based requests on this browser — try an incognito window with extensions off, or a different browser, to confirm.';
     } else {
       hint = err.message;
     }
