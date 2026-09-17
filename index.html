@@ -447,13 +447,27 @@ function renderResult(result, sourceLabel){
 
 /* ---------- Fetching ---------- */
 async function fetchStation(icao){
-  const url = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('Network response was not OK ('+res.status+')');
-  const text = await res.text();
+  const directUrl = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`;
+  let text, usedProxy=false;
+  try{
+    const res = await fetch(directUrl);
+    if(!res.ok) throw new Error('status '+res.status);
+    text = await res.text();
+  } catch(directErr){
+    // Direct request blocked (network restriction or CORS) — retry via proxy
+    try{
+      const res2 = await fetch(proxyUrl);
+      if(!res2.ok) throw new Error('status '+res2.status);
+      text = await res2.text();
+      usedProxy = true;
+    } catch(proxyErr){
+      throw new Error('DIRECT_AND_PROXY_FAILED');
+    }
+  }
   const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
   if(!line) throw new Error('No recent observation returned for '+icao);
-  return line;
+  return {line, usedProxy};
 }
 
 async function doFetch(){
@@ -462,17 +476,18 @@ async function doFetch(){
   const btn = document.getElementById('fetchBtn');
   btn.textContent='Fetching…'; btn.disabled=true;
   try{
-    const raw = await fetchStation(icao);
-    const result = parseMetar(raw);
-    renderResult(result, `Live from aviationweather.gov · ${icao} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
+    const {line, usedProxy} = await fetchStation(icao);
+    const result = parseMetar(line);
+    const via = usedProxy ? 'via proxy (direct connection was blocked)' : 'direct';
+    renderResult(result, `Live from aviationweather.gov · ${icao} · ${via} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
   } catch(err){
     document.getElementById('statusDot').className='dot bad';
     const log = document.getElementById('logList');
     let hint;
     if(location.protocol==='file:'){
       hint = 'This page is open as a local file (file://), which browsers block from making live network requests. Serve it over http(s) — e.g. GitHub Pages, or run a local server — and this will work.';
-    } else if(err instanceof TypeError){
-      hint = 'The browser blocked or could not reach aviationweather.gov — likely a network/firewall restriction on this connection, not a bug in the tool. Try opening https://aviationweather.gov/api/data/metar?ids='+icao+'&format=raw directly in a new tab to confirm.';
+    } else if(err.message==='DIRECT_AND_PROXY_FAILED'){
+      hint = 'Both the direct connection and the backup proxy failed — this looks like no internet access on this connection right now, rather than a site-specific block.';
     } else {
       hint = err.message;
     }
