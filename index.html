@@ -168,7 +168,7 @@
     <button class="primary" id="fetchBtn">Fetch latest</button>
     <span class="spacer"></span>
     <span class="autorefresh" id="refreshLabel">Auto-refresh off</span>
-    <button id="autoBtn">Auto-refresh 5 min</button>
+    <button id="autoBtn">Auto-refresh 2 min</button>
     <button id="sirenBtn">Arm audio alert</button>
   </div>
 
@@ -255,7 +255,7 @@ document.getElementById('sirenBtn').addEventListener('click', ()=>{
 
 /* ---------- METAR PARSER ---------- */
 const WX_PHENOM = 'DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS';
-const WX_RE = new RegExp(`^(\\+|-|VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:${WX_PHENOM}){1,4})$`);
+const WX_RE = new RegExp(`^(\\+|-|VC)?(?:(?:MI|PR|BC|DR|BL|SH|FZ)?(?:${WX_PHENOM}){1,4}|TS(?:${WX_PHENOM})*)$`);
 const WIND_RE = /^(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?(KT|MPS|KMH)$/;
 const WINDVAR_RE = /^\d{3}V\d{3}$/;
 const VIS4_RE = /^(\d{4})(NDV)?$/;
@@ -369,9 +369,9 @@ function parseMetar(raw){
     groups.remarks = rmk.join(' ');
   }
 
-  // Leftover unrecognized tokens
+  // Trailing free text (e.g. local supplementary notes not preceded by RMK)
   if(i<t.length){
-    warnings.push(`Unrecognized token(s) in observation: ${t.slice(i).join(' ')}`);
+    groups.extra = t.slice(i).join(' ');
   }
 
   return {errors,warnings,groups,clean};
@@ -387,6 +387,7 @@ const CHECK_ROWS = [
   ['TEMP/DEW', r=>r.groups.tempDew, r=>!r.groups.tempDew],
   ['QNH', r=>r.groups.qnh, r=>!r.groups.qnh],
   ['TREND', r=>r.groups.trend||'—', r=>false],
+  ['SUPPL. TEXT', r=>r.groups.extra||'—', r=>false],
 ];
 
 function renderResult(result, sourceLabel){
@@ -467,7 +468,15 @@ async function doFetch(){
   } catch(err){
     document.getElementById('statusDot').className='dot bad';
     const log = document.getElementById('logList');
-    log.innerHTML = `<div class="log-item err">ERROR — Could not fetch ${icao}: ${err.message}. Check the station code or paste a METAR manually below.</div>`;
+    let hint;
+    if(location.protocol==='file:'){
+      hint = 'This page is open as a local file (file://), which browsers block from making live network requests. Serve it over http(s) — e.g. GitHub Pages, or run a local server — and this will work.';
+    } else if(err instanceof TypeError){
+      hint = 'The browser blocked or could not reach aviationweather.gov — likely a network/firewall restriction on this connection, not a bug in the tool. Try opening https://aviationweather.gov/api/data/metar?ids='+icao+'&format=raw directly in a new tab to confirm.';
+    } else {
+      hint = err.message;
+    }
+    log.innerHTML = `<div class="log-item err">ERROR — Could not fetch ${icao} live. ${hint} You can still paste a METAR manually below.</div>`;
   } finally {
     btn.textContent='Fetch latest'; btn.disabled=false;
   }
@@ -494,15 +503,15 @@ function setAuto(on){
   if(autoTimer) clearInterval(autoTimer);
   if(autoOn){
     btn.textContent='Stop auto-refresh';
-    countdown=300;
+    countdown=120;
     updateRefreshLabel();
     autoTimer = setInterval(()=>{
       countdown--;
-      if(countdown<=0){ doFetch(); countdown=300; }
+      if(countdown<=0){ doFetch(); countdown=120; }
       updateRefreshLabel();
     },1000);
   } else {
-    btn.textContent='Auto-refresh 5 min';
+    btn.textContent='Auto-refresh 2 min';
     updateRefreshLabel();
   }
 }
