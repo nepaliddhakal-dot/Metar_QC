@@ -377,6 +377,47 @@ function parseMetar(raw){
   return {errors,warnings,groups,clean};
 }
 
+/* ---------- Observation-to-observation comparison (catch implausible jumps) ---------- */
+const lastByStation = {};
+const TEMP_JUMP_THRESHOLD = 5;   // °C between consecutive obs
+const DEW_JUMP_THRESHOLD = 5;    // °C
+const QNH_JUMP_THRESHOLD = 3;    // hPa
+const WIND_SPEED_JUMP_THRESHOLD = 15; // kt
+
+function tempValue(s){ return s.startsWith('M') ? -parseInt(s.slice(1),10) : parseInt(s,10); }
+
+function compareToPrevious(icao, groups){
+  const cautions = [];
+  const prev = lastByStation[icao];
+  if(prev && prev.time !== groups.time){
+    if(prev.tempDew && groups.tempDew){
+      const [pt] = prev.tempDew.split('/'); const [ct] = groups.tempDew.split('/');
+      if(/^M?\d{2}$/.test(pt) && /^M?\d{2}$/.test(ct)){
+        const diff = Math.abs(tempValue(ct)-tempValue(pt));
+        if(diff >= TEMP_JUMP_THRESHOLD) cautions.push(`Temperature changed sharply since last observation (${pt}°C → ${ct}°C).`);
+      }
+      const pd = prev.tempDew.split('/')[1], cd = groups.tempDew.split('/')[1];
+      if(pd && cd && /^M?\d{2}$/.test(pd) && /^M?\d{2}$/.test(cd)){
+        const diff = Math.abs(tempValue(cd)-tempValue(pd));
+        if(diff >= DEW_JUMP_THRESHOLD) cautions.push(`Dew point changed sharply since last observation (${pd}°C → ${cd}°C).`);
+      }
+    }
+    if(prev.qnh && groups.qnh && prev.qnh[0]==='Q' && groups.qnh[0]==='Q'){
+      const diff = Math.abs(parseInt(groups.qnh.slice(1),10) - parseInt(prev.qnh.slice(1),10));
+      if(diff >= QNH_JUMP_THRESHOLD) cautions.push(`QNH changed sharply since last observation (${prev.qnh} → ${groups.qnh}).`);
+    }
+    if(prev.wind && groups.wind){
+      const pm = prev.wind.match(WIND_RE), cm = groups.wind.match(WIND_RE);
+      if(pm && cm){
+        const diff = Math.abs(parseInt(cm[2],10) - parseInt(pm[2],10));
+        if(diff >= WIND_SPEED_JUMP_THRESHOLD) cautions.push(`Wind speed changed sharply since last observation (${prev.wind} → ${groups.wind}).`);
+      }
+    }
+  }
+  lastByStation[icao] = groups;
+  return cautions;
+}
+
 /* ---------- Rendering ---------- */
 const CHECK_ROWS = [
   ['STATION/TIME', r=>[r.groups.station, r.groups.time].filter(Boolean).join(' '), r=>!r.groups.station || !r.groups.time],
@@ -497,6 +538,8 @@ async function doFetch(){
   try{
     const {line, via} = await fetchStation(icao);
     const result = parseMetar(line);
+    const trendCautions = compareToPrevious(icao, result.groups);
+    result.warnings = result.warnings.concat(trendCautions);
     const viaLabel = via==='proxy' ? 'via backup proxy (direct connection blocked)' : 'direct';
     renderResult(result, `Live from aviationweather.gov · ${icao} · ${viaLabel} · fetched ${new Date().toUTCString().slice(17,25)}Z`);
   } catch(err){
