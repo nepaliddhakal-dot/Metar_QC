@@ -446,20 +446,31 @@ function renderResult(result, sourceLabel){
 }
 
 /* ---------- Fetching ---------- */
+// If you deploy your own Cloudflare Worker proxy (recommended — see setup notes),
+// paste its URL here, e.g. 'https://metar-proxy.yourname.workers.dev'
+const CUSTOM_PROXY = 'https://metar-proxy.nepali-ddhakal.workers.dev';
+
+function extractMetarLine(text){
+  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+  return lines.find(l=>/^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(l)) || lines[0] || null;
+}
+
 async function fetchStation(icao){
   const directUrl = `https://aviationweather.gov/api/data/metar?ids=${encodeURIComponent(icao)}&format=raw&hours=2`;
-  const proxies = [
+  const proxies = [];
+  if(CUSTOM_PROXY) proxies.push(u => `${CUSTOM_PROXY}?url=${encodeURIComponent(u)}`);
+  proxies.push(
     u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
     u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
-  ];
+    u => `https://r.jina.ai/${u}`
+  );
 
   // Try direct first
   try{
     const res = await fetch(directUrl);
     if(res.ok){
       const text = await res.text();
-      const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
+      const line = extractMetarLine(text);
       if(line) return {line, via:'direct'};
     }
   } catch(e){ /* fall through to proxies */ }
@@ -470,7 +481,7 @@ async function fetchStation(icao){
       const res = await fetch(build(directUrl));
       if(!res.ok) continue;
       const text = await res.text();
-      const line = text.split('\n').map(l=>l.trim()).filter(Boolean)[0];
+      const line = extractMetarLine(text);
       if(line && /^(METAR|SPECI)?\s*[A-Z]{4}\s\d{6}Z/.test(line)) return {line, via:'proxy'};
     } catch(e){ /* try next proxy */ }
   }
